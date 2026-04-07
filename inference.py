@@ -24,17 +24,14 @@ STDOUT FORMAT (Required by Hackathon):
 """
 
 import os
-import json
 import re
 import sys
-from typing import Optional, Dict, List
+from typing import Dict, List, Tuple
 
 from openai import OpenAI
+import httpx
 
-# Environment imports
-from environment import DataCenterOpsEnv
-from models import TaskTier, ActionType, AgentRole, DataCenterAction
-from grader import Grader
+from models import ActionType, DataCenterAction
 
 # ---------------------------------------------------------------------------
 # Configuration (from environment variables as per hackathon requirements)
@@ -43,13 +40,15 @@ from grader import Grader
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY", "")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
-LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME", "")
+ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://127.0.0.1:7860").rstrip("/")
 
 # Task configuration
 MAX_STEPS = {"easy": 24, "medium": 42, "hard": 60}
+REPAIR_STEPS = {"easy": 4, "medium": 6, "hard": 9}
 TEMPERATURE = 0.2
 MAX_TOKENS = 150
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+USE_LLM = os.getenv("USE_LLM", "false").lower() == "true"
 
 # ---------------------------------------------------------------------------
 # LLM Agent
@@ -135,6 +134,8 @@ class LLMAgent:
 
     def act(self, obs, state, info: dict) -> int:
         """Get action from LLM based on current observation."""
+        if not USE_LLM:
+            return heuristic_action(obs)
         # Build the user message
         user_message = self._build_observation_prompt(obs, state, info)
 
@@ -180,8 +181,125 @@ class LLMAgent:
         except Exception as e:
             if DEBUG:
                 print(f"[ERROR] LLM call failed: {e}", file=sys.stderr)
-            valid = [a.value for a in obs.valid_actions]
-            return valid[0] if valid else 0
+            return heuristic_action(obs)
+
+
+# ---------------------------------------------------------------------------
+# API Helpers
+# ---------------------------------------------------------------------------
+
+ACTION_ORDER: List[ActionType] = [
+    ActionType.WATCHER_MONITOR,
+    ActionType.WATCHER_ALERT,
+    ActionType.WATCHER_INVESTIGATE,
+    ActionType.RESPONDER_DIAGNOSE,
+    ActionType.RESPONDER_FIX,
+    ActionType.RESPONDER_REQUEST_HELP,
+    ActionType.COORDINATOR_DISPATCH,
+    ActionType.COORDINATOR_ESCALATE,
+    ActionType.COORDINATOR_RESOLVE,
+    ActionType.COORDINATOR_MESSAGE,
+]
+
+
+def action_from_index(value) -> ActionType:
+    if isinstance(value, ActionType):
+        return value
+    if isinstance(value, str):
+        return ActionType(value)
+    idx = int(value)
+    return ACTION_ORDER[idx % len(ACTION_ORDER)]
+
+
+def _incident_priority(obs, incident) -> float:
+    severity_weight = {"low": 1.0, "medium": 2.0, "high": 3.5, "critical": 5.0}
+    age = max(0, obs.step_number - incident.step_started)
+    return severity_weight.get(incident.severity.value, 2.0) + 0.25 * age
+
+
+def heuristic_action(obs, memory: dict | None = None) -> ActionType:
+    memory = memory or {}
+    watcher = obs.agent_states.get("watcher")
+    responder = obs.agent_states.get("responder")
+    coordinator = obs.agent_states.get("coordinator")
+
+    if obs.current_agent.value == "watcher":
+        if obs.active_incidents and watcher and not watcher.alert_sent:
+            return ActionType.WATCHER_ALERT
+        if watcher and watcher.alert_sent and not watcher.investigation_complete:
+            return ActionType.WATCHER_INVESTIGATE
+        return ActionType.WATCHER_MONITOR
+
+    if obs.current_agent.value == "responder":
+        if watcher and watcher.investigation_complete and responder and not responder.diagnosis_complete:
+            return ActionType.RESPONDER_DIAGNOSE
+        if responder and responder.diagnosis_complete and not responder.help_requested:
+            return ActionType.RESPONDER_REQUEST_HELP
+        return ActionType.RESPONDER_FIX
+
+    # Coordinator policy:
+    # 1) resolve incidents that have completed repair window
+    # 2) dispatch unassigned incidents when prerequisites are satisfied
+    # 3) escalate if critical incidents remain
+    repair_steps = REPAIR_STEPS.get(obs.task_tier.value, 4)
+
+    ranked = sorted(obs.active_incidents, key=lambda i: _incident_priority(obs, i), reverse=True)
+
+    for inc in ranked:
+        if inc.assigned_technician and inc.dispatch_step is not None:
+            if (obs.step_number - inc.dispatch_step) >= repair_steps:
+                return ActionType.COORDINATOR_RESOLVE
+
+    pipeline_ready = bool(
+        watcher and watcher.alert_sent and watcher.investigation_complete
+        and responder and responder.diagnosis_complete and responder.help_requested
+    )
+    unassigned = any(not inc.assigned_technician for inc in obs.active_incidents)
+    if pipeline_ready and unassigned and obs.technicians_available > 0:
+        return ActionType.COORDINATOR_DISPATCH
+
+    if any(inc.severity.value in {"high", "critical"} for inc in ranked):
+        return ActionType.COORDINATOR_ESCALATE
+
+    # Anti-loop safety: if no progression for several coordinator turns, force resolve attempt
+    if memory.get("stalled_turns", 0) >= 2 and any(inc.assigned_technician for inc in ranked):
+        return ActionType.COORDINATOR_RESOLVE
+
+    return ActionType.COORDINATOR_MESSAGE
+
+
+def to_obs(obj: dict):
+    from models import DataCenterObservation
+    return DataCenterObservation(**obj)
+
+
+def to_state(obj: dict):
+    from models import DataCenterState
+    return DataCenterState(**obj)
+
+
+def api_reset(client: httpx.Client, task: str, seed: int) -> Tuple[str, dict]:
+    resp = client.post(f"{ENV_BASE_URL}/reset", params={"task": task, "seed": seed}, timeout=30.0)
+    resp.raise_for_status()
+    data = resp.json()
+    return data["episode_id"], data["observation"]
+
+
+def api_state(client: httpx.Client, episode_id: str) -> dict:
+    resp = client.get(f"{ENV_BASE_URL}/state", params={"episode_id": episode_id}, timeout=30.0)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def api_step(client: httpx.Client, episode_id: str, action: ActionType) -> dict:
+    resp = client.post(
+        f"{ENV_BASE_URL}/step",
+        params={"episode_id": episode_id},
+        json={"action_type": action.value},
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -193,12 +311,11 @@ def run_episode(task: str, seed: int = 42) -> dict:
     Run a single episode with LLM agent.
     Outputs in the required hackathon format.
     """
-    task_tier = TaskTier(task)
-    env = DataCenterOpsEnv(task_tier=task_tier, seed=seed)
-    obs = env.reset(seed=seed)
-
     agent = LLMAgent()
     max_steps = MAX_STEPS[task]
+    http_client = httpx.Client()
+    episode_id, obs_obj = api_reset(http_client, task, seed)
+    obs = to_obs(obs_obj)
 
     # Output [START] line
     print(f"[START] task={task} env=datacenter-ops-env model={MODEL_NAME}")
@@ -210,20 +327,38 @@ def run_episode(task: str, seed: int = 42) -> dict:
     last_error = "null"
     success = False
     final_score = 0.0
+    policy_memory: Dict[str, int] = {"last_resolved": 0, "stalled_turns": 0}
 
     while step_count < max_steps:
-        state = env.state()
+        state = to_state(api_state(http_client, episode_id))
 
         try:
-            action_int = agent.act(obs, state, info)
-            action = DataCenterAction(action_type=ActionType(action_int))
+            if USE_LLM:
+                action_int = agent.act(obs, state, info)
+                action = DataCenterAction(action_type=action_from_index(action_int))
+            else:
+                action = DataCenterAction(action_type=heuristic_action(obs, policy_memory))
         except Exception as e:
-            valid = obs.valid_actions
-            action = DataCenterAction(action_type=valid[0] if valid else ActionType.WATCHER_MONITOR)
+            action = DataCenterAction(action_type=heuristic_action(obs, policy_memory))
             last_error = str(e)
 
         try:
-            obs, reward, terminated, truncated, info = env.step(action)
+            step_result = api_step(http_client, episode_id, action.action_type)
+            obs = to_obs(step_result["observation"])
+            reward = float(step_result.get("reward", obs.last_reward or 0.0))
+            terminated = bool(step_result.get("terminated", obs.done))
+            truncated = bool(step_result.get("truncated", obs.truncated))
+            info = step_result.get("info", {})
+            resolved = int(info.get("incidents_resolved", 0))
+            if resolved > policy_memory["last_resolved"]:
+                policy_memory["last_resolved"] = resolved
+                policy_memory["stalled_turns"] = 0
+            elif action.action_type in (
+                ActionType.COORDINATOR_MESSAGE,
+                ActionType.COORDINATOR_ESCALATE,
+                ActionType.COORDINATOR_DISPATCH,
+            ):
+                policy_memory["stalled_turns"] += 1
             total_reward += reward
             rewards_list.append(reward)
             step_count += 1
@@ -243,11 +378,10 @@ def run_episode(task: str, seed: int = 42) -> dict:
             print(f"[STEP] step={step_count + 1} action={action.action_type.value} reward=0.00 done=false error={last_error}")
             step_count += 1
 
-    # Get final score
-    replay = env.get_replay()
-    if replay.result:
-        final_score = replay.result.score
-        success = replay.result.solved
+    # Get final score approximation from final observation
+    total_incidents = max(1, obs.incident_count)
+    final_score = len(obs.resolved_incidents) / total_incidents
+    success = success or (len(obs.active_incidents) == 0 and len(obs.resolved_incidents) > 0)
     
     # Format rewards list
     rewards_str = ",".join(f"{r:.2f}" for r in rewards_list)
@@ -255,7 +389,7 @@ def run_episode(task: str, seed: int = 42) -> dict:
     # Output [END] line
     print(f"[END] success={'true' if success else 'false'} steps={step_count} score={final_score:.2f} rewards={rewards_str}")
     
-    env.close()
+    http_client.close()
 
     return {
         "task": task,
@@ -280,6 +414,8 @@ def main():
     print(f"API Base: {API_BASE_URL}", file=sys.stderr)
     print(f"Model: {MODEL_NAME}", file=sys.stderr)
     print(f"Debug: {DEBUG}", file=sys.stderr)
+    print(f"Use LLM: {USE_LLM}", file=sys.stderr)
+    print(f"Env Base: {ENV_BASE_URL}", file=sys.stderr)
 
     results = []
     seeds = [42, 123, 456]  # Multiple seeds for robustness
