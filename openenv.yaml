@@ -1,0 +1,70 @@
+name: datacenter-ops-env
+version: 1.0.0
+description: >
+  Multi-agent RL environment for data center operations.
+  Three coordinating agents (Watcher, Responder, Coordinator) handle
+  equipment incidents with human-like communication patterns —
+  parallel work, real-time alerts, disagreement resolution, and escalation.
+  Addresses the global data center labor shortage (1.6M workers by 2030).
+
+author: OpenEnv Hackathon 2026 Submission
+license: MIT
+
+tags:
+  - multi-agent
+  - coordination
+  - real-world
+  - data-center
+  - rl
+  - labor-shortage
+  - incident-response
+
+environment:
+  module: server.app
+  class: DataCenterEnvironment
+  action: DataCenterAction
+  observation: DataCenterObservation
+
+tasks:
+  - id: single_incident
+    name: Single Incident Response
+    difficulty: easy
+    description: A single equipment anomaly. Coordinate to resolve within 24 steps.
+    env_var: DATACENTER_TASK=easy
+
+  - id: concurrent_incidents
+    name: Concurrent Incident Management
+    difficulty: medium
+    description: Multiple simultaneous incidents with 20% cascade probability.
+    env_var: DATACENTER_TASK=medium
+
+  - id: cascade_failure
+    name: Cascade Failure Prevention
+    difficulty: hard
+    description: Critical multi-system failures with 35% cascade risk and disagreement resolution.
+    env_var: DATACENTER_TASK=hard
+
+agents:
+  - name: watcher
+    role: Monitors sensors, detects anomalies, broadcasts alerts
+    actions: [0, 1, 2]
+
+  - name: responder
+    role: Diagnoses root causes, attempts automated fixes, requests resources
+    actions: [3, 4, 5]
+
+  - name: coordinator
+    role: Dispatches technicians, escalates, resolves, mediates disagreements
+    actions: [6, 7, 8, 9]
+
+reward:
+  dense: Per-step rewards for contextually correct agent actions
+  sparse: Resolution bonuses scaled by severity and response speed
+  delayed: Episode-end bonuses for coordination quality and resolution rate
+  penalty: Cascade triggers, SLA violations, invalid action sequences
+
+deployment:
+  server_module: server.app
+  server_var: app
+  port: 8000
+  hf_spaces_sdk: gradio
