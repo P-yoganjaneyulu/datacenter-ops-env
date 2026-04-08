@@ -38,7 +38,7 @@ from models import ActionType, DataCenterAction
 # ---------------------------------------------------------------------------
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY", "")
+API_KEY = os.getenv("API_KEY") or os.getenv("HF_TOKEN", "")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://127.0.0.1:7860").rstrip("/")
 
@@ -48,7 +48,7 @@ REPAIR_STEPS = {"easy": 4, "medium": 6, "hard": 9}
 TEMPERATURE = 0.2
 MAX_TOKENS = 150
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
-USE_LLM = os.getenv("USE_LLM", "false").lower() == "true"
+USE_LLM = os.getenv("USE_LLM", "true").lower() == "true"
 
 # ---------------------------------------------------------------------------
 # LLM Agent
@@ -89,9 +89,13 @@ class LLMAgent:
     """LLM-based agent for DataCenterOps environment."""
 
     def __init__(self):
+        # Prefer evaluator-injected credentials for LLM criteria checks.
+        runtime_base_url = os.environ.get("API_BASE_URL", API_BASE_URL)
+        runtime_api_key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or API_KEY
         self.client = OpenAI(
-            base_url=API_BASE_URL,
-            api_key=API_KEY,
+            base_url=runtime_base_url,
+            api_key=runtime_api_key,
+            timeout=5.0,
         )
         self.conversation_history: List[Dict] = []
 
