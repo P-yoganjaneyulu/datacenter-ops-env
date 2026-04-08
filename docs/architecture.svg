@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="380" viewBox="0 0 960 380">
+  <rect width="960" height="380" fill="#0b1020"/>
+  <rect x="30" y="30" width="900" height="70" rx="10" fill="#1f2937" stroke="#60a5fa"/>
+  <text x="50" y="73" fill="#e5e7eb" font-size="24" font-family="Arial">DataCenterOps OpenEnv Runtime</text>
+
+  <rect x="30" y="130" width="280" height="210" rx="10" fill="#111827" stroke="#34d399"/>
+  <text x="50" y="160" fill="#a7f3d0" font-size="20" font-family="Arial">Inference Client</text>
+  <text x="50" y="190" fill="#d1d5db" font-size="14" font-family="Arial">inference.py</text>
+  <text x="50" y="215" fill="#d1d5db" font-size="14" font-family="Arial">[START]/[STEP]/[END] logs</text>
+  <text x="50" y="240" fill="#d1d5db" font-size="14" font-family="Arial">HTTP: /reset /step /state</text>
+
+  <rect x="340" y="130" width="280" height="210" rx="10" fill="#111827" stroke="#f59e0b"/>
+  <text x="360" y="160" fill="#fde68a" font-size="20" font-family="Arial">OpenEnv Server</text>
+  <text x="360" y="190" fill="#d1d5db" font-size="14" font-family="Arial">server.app -> create_app()</text>
+  <text x="360" y="215" fill="#d1d5db" font-size="14" font-family="Arial">FastAPI + typed schemas</text>
+  <text x="360" y="240" fill="#d1d5db" font-size="14" font-family="Arial">Session by episode_id</text>
+
+  <rect x="650" y="130" width="280" height="210" rx="10" fill="#111827" stroke="#f472b6"/>
+  <text x="670" y="160" fill="#fbcfe8" font-size="20" font-family="Arial">Environment Core</text>
+  <text x="670" y="190" fill="#d1d5db" font-size="14" font-family="Arial">DataCenterOpsEnv</text>
+  <text x="670" y="215" fill="#d1d5db" font-size="14" font-family="Arial">watcher/responder/coordinator</text>
+  <text x="670" y="240" fill="#d1d5db" font-size="14" font-family="Arial">rubric reward + cascade dynamics</text>
+
+  <line x1="310" y1="230" x2="340" y2="230" stroke="#9ca3af" stroke-width="3"/>
+  <polygon points="340,230 330,224 330,236" fill="#9ca3af"/>
+  <line x1="620" y1="230" x2="650" y2="230" stroke="#9ca3af" stroke-width="3"/>
+  <polygon points="650,230 640,224 640,236" fill="#9ca3af"/>
+</svg>
