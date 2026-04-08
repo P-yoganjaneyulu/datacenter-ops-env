@@ -507,6 +507,13 @@ class CoordinationRubric(Rubric):
         total_messages = len(observation.message_history)
         if total_messages > 10:
             score -= 0.1 * (total_messages - 10)  # Spam penalty
+
+        # Penalize repetitive coordination chatter while incidents remain unresolved
+        if action.action_type == ActionType.COORDINATOR_MESSAGE and observation.active_incidents:
+            if len(observation.message_history) >= 2:
+                last_two = [m.message_type for m in observation.message_history[-2:]]
+                if last_two == ["coordination", "coordination"]:
+                    score -= 0.4
         
         return score
     
