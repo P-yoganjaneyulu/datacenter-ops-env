@@ -37,8 +37,8 @@ from models import ActionType, DataCenterAction
 # Configuration (from environment variables as per hackathon requirements)
 # ---------------------------------------------------------------------------
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.getenv("API_KEY") or os.getenv("HF_TOKEN", "")
+API_BASE_URL = os.getenv("API_BASE_URL")
+API_KEY = os.getenv("API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://127.0.0.1:7860").rstrip("/")
 
@@ -89,12 +89,19 @@ class LLMAgent:
     """LLM-based agent for DataCenterOps environment."""
 
     def __init__(self):
-        # Prefer evaluator-injected credentials for LLM criteria checks.
-        runtime_base_url = os.environ.get("API_BASE_URL", API_BASE_URL)
-        runtime_api_key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or API_KEY
+        # Use only hackathon-injected credentials (API_BASE_URL and API_KEY must be set by the evaluator)
+        base_url = os.environ.get("API_BASE_URL")
+        api_key = os.environ.get("API_KEY")
+        
+        if not base_url or not api_key:
+            raise ValueError(
+                "CRITICAL: API_BASE_URL and API_KEY environment variables must be injected by the hackathon evaluator. "
+                "Do not hardcode or use alternative providers."
+            )
+        
         self.client = OpenAI(
-            base_url=runtime_base_url,
-            api_key=runtime_api_key,
+            base_url=base_url,
+            api_key=api_key,
             timeout=5.0,
         )
         self.conversation_history: List[Dict] = []
