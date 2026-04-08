@@ -571,6 +571,45 @@ class EvidenceQualityRubric(Rubric):
         return "No evidence gathered (0.00)"
 
 
+class StagnationRubric(Rubric):
+    """Penalizes passive/no-progress actions when urgent incidents exist."""
+
+    name = "stagnation"
+    description = "Penalizes no-op behavior under active incident pressure"
+
+    def compute(
+        self,
+        observation: DataCenterObservation,
+        action: DataCenterAction,
+        prev_state: Optional[Dict[str, Any]] = None
+    ) -> float:
+        if not observation.active_incidents:
+            return 0.0
+
+        severity_weight = {"critical": 1.4, "high": 1.0, "medium": 0.6, "low": 0.3}
+        max_pressure = 0.0
+        for incident in observation.active_incidents:
+            age = max(0, observation.step_number - incident.step_started)
+            sev = severity_weight.get(incident.severity.value, 0.6)
+            pressure = sev + min(1.0, age / 20.0)
+            max_pressure = max(max_pressure, pressure)
+
+        passive_actions = {
+            ActionType.WATCHER_MONITOR,
+            ActionType.RESPONDER_FIX,
+            ActionType.COORDINATOR_MESSAGE,
+        }
+        if action.action_type in passive_actions:
+            return -0.4 * max_pressure
+
+        return 0.0
+
+    def explain(self, score: float) -> str:
+        if score < 0:
+            return f"Passive action under incident pressure ({score:.2f})"
+        return "No stagnation penalty (0.00)"
+
+
 # =============================================================================
 # SLA Rubric
 # =============================================================================
@@ -650,6 +689,7 @@ class DataCenterRubric(CompositeRubric):
             OrderingRubric(),
             CoordinationRubric(),
             EvidenceQualityRubric(),
+            StagnationRubric(),
             SLARubric(),
         ]
         
@@ -662,6 +702,7 @@ class DataCenterRubric(CompositeRubric):
             0.5,  # ordering
             0.5,  # coordination
             0.3,  # evidence quality
+            0.8,  # stagnation
             1.0,  # SLA
         ]
         
@@ -706,6 +747,9 @@ class DataCenterRubric(CompositeRubric):
                 breakdown.coordination_bonus = max(0, score)
             elif rubric.name == "evidence_quality":
                 breakdown.evidence_quality = max(0, score)
+            elif rubric.name == "stagnation":
+                if score < 0:
+                    breakdown.time_penalty += abs(score)
             elif rubric.name == "sla":
                 if score < 0:
                     breakdown.sla_penalty = abs(score)
