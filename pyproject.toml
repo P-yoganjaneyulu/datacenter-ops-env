@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datacenter-ops-env"
+version = "1.0.0"
+description = "OpenEnv-compatible multi-agent RL environment for data center operations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "OpenEnv Hackathon Submission"}
+]
+dependencies = [
+  "openenv>=0.2.0",
+  "fastapi>=0.109.0",
+  "uvicorn[standard]>=0.27.0",
+  "pydantic>=2.0.0",
+  "httpx>=0.26.0",
+  "numpy>=1.26.0",
+  "openai>=1.12.0"
+]
+
+[project.scripts]
+server = "server.app:main"
+
+[project.urls]
+Homepage = "https://huggingface.co/spaces"
+
+[tool.setuptools]
+include-package-data = true
+py-modules = [
+  "app",
+  "baseline",
+  "client",
+  "environment",
+  "grader",
+  "inference",
+  "models",
+  "multi_agent",
+  "pre_validation",
+  "rubrics"
+]
+
+[tool.setuptools.packages.find]
+include = ["openenv*", "server*"]
+exclude = ["docs*", "tests*"]

@@ -7,208 +7,118 @@ sdk: docker
 pinned: false
 app_port: 7860
 tags:
-  - openenv-0.2.3
   - openenv
   - rl-environment
   - multi-agent
 ---
 
-# DataCenterOps — Winner-Level Multi-Agent RL Environment
+# DataCenterOps OpenEnv Environment
 
-A production-grade multi-agent reinforcement learning environment for data center operations, designed to match or exceed the quality of OpenEnv hackathon winners.
+This repository provides a typed OpenEnv-compatible RL environment for data-center incident response.
 
-## 🏆 Winner-Level Features
+It is designed to be **deployment-safe first** (API contract, inference stability, pre-validation), then score-oriented.
 
-### 1. Pydantic Models (OpenEnv-Compliant)
-- Type-safe `Action`, `Observation`, `State` models
-- Automatic validation and serialization
-- Self-documenting API
+![Architecture overview](docs/architecture.svg)
 
-### 2. Rubric-Based Reward System
-- Detailed reward breakdown for debugging
-- Component-level scoring (detection, investigation, resolution)
-- Explanation generation for each reward
+## What is verified (factual)
 
-### 3. Evidence Tracking
-- `evidence_gathered`: What the agent has learned
-- `unknowns`: What the agent doesn't know yet
-- `reasoning_trace`: History of agent decisions
+The following have been validated in this repo:
 
-### 4. Grading System
-- `/grader` endpoint for 0-1 scoring
-- Multi-episode benchmarking
-- Baseline agent comparison
+- FastAPI server startup using `uvicorn server.app:app --host 0.0.0.0 --port 7860`
+- Endpoints:
+  - `GET /health`
+  - `POST /reset`
+  - `POST /step` → `{observation, reward, terminated, truncated, info}`
+  - `GET /state`
+- `inference.py` runs end-to-end against remote API (`ENV_BASE_URL`) with strict `[START]/[STEP]/[END]` output format
+- `pre_validation.py` checks files/imports and runs a live API episode simulation
 
-### 5. Replay System
-- Full episode recording
-- Step-by-step analysis
-- Performance metrics
+## Environment interface
 
-### 6. Real Multi-Agent Architecture
-- Independent agents with own state
-- Structured message passing
-- Emergent coordination
+Core environment class: `environment.DataCenterOpsEnv`
 
-## Architecture
+- `reset(seed=..., task_tier=...) -> DataCenterObservation`
+- `step(action) -> (observation, reward, terminated, truncated, info)`
+- `state() -> DataCenterState`
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      FastAPI Server                         │
-├─────────────────────────────────────────────────────────────┤
-│  /reset  │ /step │ /state │ /grader │ /tasks │ /replay     │
-├──────────┴───────┴────────┴─────────┴────────┴─────────────┤
-│                    DataCenterOpsEnv                         │
-├───────────────────┬────────────────┬───────────────────────┤
-│  Watcher Agent    │ Responder      │ Coordinator           │
-│  - Monitor        │ - Diagnose     │ - Dispatch            │
-│  - Alert          │ - Fix          │ - Escalate            │
-│  - Investigate    │ - Request Help │ - Resolve             │
-└───────────────────┴────────────────┴───────────────────────┘
-```
-
-## Quick Start
-
-### Docker
-
-```bash
-docker build -t datacenter-ops .
-docker run -p 7860:7860 datacenter-ops
-```
-
-### Python Client
-
-```python
-from client import DataCenterClient
-from models import DataCenterAction, ActionType
-
-async with DataCenterClient("http://localhost:7860") as env:
-    # Reset
-    obs = await env.reset(task_tier="easy")
-    
-    # Run episode
-    while not obs.done:
-        action = DataCenterAction(
-            action_type=obs.valid_actions[0],
-            reasoning="Agent decision",
-            confidence=0.8,
-        )
-        obs, reward, terminated, truncated, info = await env.step(action)
-```
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/reset` | POST | Reset environment |
-| `/step` | POST | Execute action |
-| `/state` | GET | Get current state |
-| `/tasks` | GET | List available tasks |
-| `/grader` | GET | Get grading status |
-| `/grader/run` | POST | Run grading |
-| `/baseline` | GET | Run baseline agent |
-| `/replay` | GET | Get episode replay |
-| `/evidence` | GET | Get gathered evidence |
-| `/unknowns` | GET | Get unknowns list |
+Server adapter: `server.datacenter_environment.DataCenterEnvironment`
 
 ## Tasks
 
-### Easy (24 steps)
-- Single incident
-- Full pipeline execution
-- High resource availability
+Defined tiers:
 
-### Medium (42 steps)
-- Multiple incidents
-- Cascade risk (20%)
-- Limited resources
+- `easy`  (24 max steps)
+- `medium` (42 max steps)
+- `hard` (60 max steps)
 
-### Hard (60 steps)
-- Concurrent incidents
-- High cascade risk (35%)
-- Resource constraints
-- Root cause analysis required
+Task metadata is in:
 
-## Action Space
+- `openenv.yaml`
+- `grader.py` (`TASK_DEFINITIONS`)
 
-| Agent | Actions |
-|-------|---------|
-| Watcher | `watcher_monitor`, `watcher_alert`, `watcher_investigate` |
-| Responder | `responder_diagnose`, `responder_fix`, `responder_request_help` |
-| Coordinator | `coordinator_dispatch`, `coordinator_escalate`, `coordinator_resolve`, `coordinator_message` |
+## Quick start
 
-## Reward Structure
-
-```python
-class RewardBreakdown:
-    # Incident handling
-    incident_detected: float    # +2.0 for timely detection
-    incident_alerted: float     # +2.0 for proper alert
-    incident_investigated: float # +1.5 for investigation
-    incident_diagnosed: float   # +1.5 for diagnosis
-    incident_dispatched: float  # +2.0 for dispatch
-    incident_resolved: float    # +12-20 for resolution
-    
-    # Quality metrics
-    correct_ordering: float     # +0.3 per correct step
-    coordination_bonus: float   # Variable
-    evidence_quality: float     # Based on relevance
-    
-    # Penalties
-    ordering_violation: float   # -0.5 per skipped step
-    invalid_action: float       # -1.0 per invalid action
-    sla_penalty: float          # Based on incident age
-```
-
-## Grading
+### 1) Install dependencies
 
 ```bash
-# Run grading
-curl -X POST http://localhost:7860/grader/run \
-  -H "Content-Type: application/json" \
-  -d '{"agent_type": "heuristic", "task_tier": "easy", "n_episodes": 3}'
+pip install -r requirements.txt
 ```
 
-## Baseline Agents
+### 2) Run server
 
-### Heuristic Agent
-- Follows correct pipeline order
-- Achieves ~80% resolution on easy tasks
-- Good coordination score
-
-### Random Agent
-- Random valid action selection
-- ~10% resolution rate
-- Demonstrates learning gap
-
-## Project Structure
-
-```
-datacenter-ops-env/
-├── models.py           # Pydantic models (Action, Observation, State)
-├── environment.py      # Core environment implementation
-├── rubrics.py          # Reward computation system
-├── grader.py           # Grading and benchmarking
-├── llm_agent.py        # LLM agent integration
-├── multi_agent.py      # Multi-agent architecture
-├── app.py              # FastAPI server
-├── client.py           # Python client library
-├── tests/              # Comprehensive test suite
-├── Dockerfile          # Container definition
-└── requirements.txt    # Dependencies
+```bash
+uvicorn server.app:app --host 0.0.0.0 --port 7860
 ```
 
-## Comparison with Winners
+### 3) Run pre-validation
 
-| Feature | This Project | Winners |
-|---------|--------------|---------|
-| Pydantic Models | ✅ | ✅ |
-| Rubric System | ✅ | ✅ |
-| Evidence Tracking | ✅ | ✅ |
-| Grading Endpoint | ✅ | ✅ |
-| Replay System | ✅ | ✅ |
-| LLM Integration | ✅ | ✅ |
-| Multi-Agent | ✅ | ✅ |
+```bash
+python pre_validation.py
+```
 
-## License
+### 4) Run inference against the server
 
-MIT
+```bash
+export ENV_BASE_URL="http://127.0.0.1:7860"
+export API_BASE_URL="https://router.huggingface.co/v1"   # only used when USE_LLM=true
+export MODEL_NAME="meta-llama/Llama-3.3-70B-Instruct"
+export HF_TOKEN="<token>"
+export USE_LLM="false"   # deterministic fallback policy
+python inference.py
+```
+
+## Docker
+
+Primary Dockerfile is at repo root and runs:
+
+```bash
+uvicorn server.app:app --host 0.0.0.0 --port 7860
+```
+
+Build/run commands:
+
+```bash
+docker build -t datacenter-ops-env .
+docker run -p 7860:7860 datacenter-ops-env
+```
+
+## Repository map (current)
+
+- `server/app.py` — OpenEnv API server entrypoint
+- `server/datacenter_environment.py` — OpenEnv interface wrapper
+- `environment.py` — core simulation logic and transitions
+- `models.py` — typed Pydantic action/observation/state models
+- `rubrics.py` — reward rubrics
+- `grader.py` — task grading and baselines
+- `inference.py` — remote API inference runner
+- `pre_validation.py` — submission contract checks
+- `multi_agent.py` — helper team wrapper for optional endpoints
+
+## Notes on claims
+
+This README intentionally avoids unverifiable leaderboard claims. Use:
+
+- `python pre_validation.py`
+- `python inference.py`
+
+for reproducible behavior checks in your environment.

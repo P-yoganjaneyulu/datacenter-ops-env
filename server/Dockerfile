@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy environment code
 COPY environment.py /app/
 COPY models.py /app/
-COPY graders.py /app/
+COPY grader.py /app/
 COPY baseline.py /app/
 COPY config.json /app/
 COPY openenv.yaml /app/
@@ -36,12 +36,12 @@ COPY --from=builder /app /app
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD python -c "import json,urllib.request; s=json.loads(urllib.request.urlopen('http://127.0.0.1:7860/health', timeout=2).read()).get('status'); raise SystemExit(0 if s=='healthy' else 1)"
 
 # Set task via env var (override at runtime: -e DATACENTER_TASK=hard)
 ENV DATACENTER_TASK=easy
 ENV PYTHONPATH=/app
 
-EXPOSE 8000
+EXPOSE 7860
 
-CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "7860"]

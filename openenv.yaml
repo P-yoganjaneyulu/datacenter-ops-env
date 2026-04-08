@@ -66,5 +66,5 @@ reward:
 deployment:
   server_module: server.app
   server_var: app
-  port: 8000
-  hf_spaces_sdk: gradio
+  port: 7860
+  hf_spaces_sdk: docker
