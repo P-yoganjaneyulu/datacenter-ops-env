@@ -301,6 +301,10 @@ class Grader:
             0.3 * avg_coordination
         )
         
+        # Clamp score strictly within (0, 1) as per hackathon requirements
+        # Score must not be 0.0 or 1.0, only values strictly between
+        score = max(0.001, min(0.999, score))
+        
         passed = (
             resolution_rate >= task.min_resolution_rate and
             avg_coordination >= task.min_coordination_score
