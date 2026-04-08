@@ -401,6 +401,10 @@ def run_episode(task: str, seed: int = 42) -> dict:
     # Get final score approximation from final observation
     total_incidents = max(1, obs.incident_count)
     final_score = len(obs.resolved_incidents) / total_incidents
+    
+    # Clamp score strictly within (0, 1) as required by hackathon validator
+    # Score must not be 0.0 or 1.0, only values strictly between
+    final_score = max(0.001, min(0.999, final_score))
     success = success or (len(obs.active_incidents) == 0 and len(obs.resolved_incidents) > 0)
     
     # Format rewards list
