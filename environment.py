@@ -23,10 +23,7 @@ Architecture:
 
 from __future__ import annotations
 
-import json
 import random
-import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
@@ -145,7 +142,10 @@ class DataCenterOpsEnv:
     def _init_state(self):
         """Initialize all state variables."""
         # Episode identification
-        self.episode_id = str(uuid.uuid4())[:8]
+        if self.seed_value is not None:
+            self.episode_id = f"ep-{self.seed_value:06d}"
+        else:
+            self.episode_id = f"ep-{random.randint(0, 999999):06d}"
         self.step_number = 0
         
         # Random state
@@ -274,13 +274,13 @@ class DataCenterOpsEnv:
             self.repair_steps = config["repair_steps"]
             self.rubric = create_rubric_for_tier(self.task_tier)
         
-        # Reset state
-        self._init_state()
-        
         if seed is not None:
             self.seed_value = seed
             random.seed(seed)
             np.random.seed(seed)
+        
+        # Reset state
+        self._init_state()
         
         if episode_id is not None:
             self.episode_id = episode_id
@@ -298,6 +298,10 @@ class DataCenterOpsEnv:
         self._update_unknowns()
         
         return self._get_observation()
+
+    def close(self) -> None:
+        """Compatibility no-op for gym-like cleanup."""
+        return None
     
     def step(
         self,
@@ -347,6 +351,13 @@ class DataCenterOpsEnv:
         # Compute reward using rubric
         obs = self._get_observation()
         reward = self.rubric.compute_full(obs, action, prev_state)
+
+        # Cascade dynamics (medium/hard)
+        cascades_added = self._maybe_spawn_cascade()
+        if cascades_added > 0:
+            cascade_penalty = 1.5 * cascades_added
+            reward.total -= cascade_penalty
+            reward.breakdown.cascade_penalty += cascade_penalty
         
         # Update tracking
         self.total_reward += reward.total
@@ -800,6 +811,30 @@ class DataCenterOpsEnv:
         order = [AgentRole.WATCHER, AgentRole.RESPONDER, AgentRole.COORDINATOR]
         idx = order.index(self.current_agent)
         self.current_agent = order[(idx + 1) % 3]
+
+    def _maybe_spawn_cascade(self) -> int:
+        """Stochastically spawn cascade incidents as unresolved incidents age."""
+        if self.cascade_prob <= 0:
+            return 0
+        if self.cascade_count >= 2:
+            return 0
+
+        active = [i for i in self.incidents if not i.resolved]
+        if not active:
+            return 0
+
+        # Cap cascade checks to avoid explosion
+        oldest_age = max(self.step_number - i.step_started for i in active)
+        age_factor = min(1.0, max(0.0, (oldest_age - 2) / 10.0))
+        trigger_prob = self.cascade_prob * age_factor * 0.2
+
+        if random.random() < trigger_prob:
+            parent = max(active, key=lambda i: (self.step_number - i.step_started, i.severity.value))
+            spawned = self._spawn_incident(cascade_from=parent)
+            if spawned is not None:
+                self.cascade_count += 1
+                return 1
+        return 0
     
     def _get_valid_actions(self) -> List[ActionType]:
         """Get valid actions for current agent."""
