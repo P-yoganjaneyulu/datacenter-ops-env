@@ -22,6 +22,14 @@ from typing import Any, Dict, List, Literal, Optional, Set
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+def safe_score(score: float) -> float:
+    """Clamp score strictly within (0, 1) to avoid exact 0.0 or 1.0 values.
+    
+    Required by Meta hackathon validator which rejects scores exactly at boundaries.
+    """
+    return max(0.001, min(0.999, score))
+
+
 def deterministic_timestamp() -> datetime:
     """Deterministic default timestamp for reproducible outputs."""
     return datetime.fromtimestamp(0)

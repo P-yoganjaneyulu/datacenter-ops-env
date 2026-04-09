@@ -26,6 +26,7 @@ from models import (
     BenchmarkResult,
     DataCenterAction,
     GradingResult,
+    safe_score,
     TaskDefinition,
     TaskTier,
 )
@@ -302,8 +303,7 @@ class Grader:
         )
         
         # Clamp score strictly within (0, 1) as per hackathon requirements
-        # Score must not be 0.0 or 1.0, only values strictly between
-        score = max(0.001, min(0.999, score))
+        score = safe_score(score)
         
         passed = (
             resolution_rate >= task.min_resolution_rate and
