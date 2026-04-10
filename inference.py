@@ -489,7 +489,24 @@ def main():
     print(f"{'OVERALL':<10} {overall_mean:>12.6f}", file=sys.stderr)
     print("=" * 60, file=sys.stderr)
 
-    return results
+    def _clamp_score_fields(value):
+        if isinstance(value, dict):
+            return {
+                k: (safe_score(v) if isinstance(v, (int, float)) and "score" in k else _clamp_score_fields(v))
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [_clamp_score_fields(v) for v in value]
+        return value
+
+    final_results = _clamp_score_fields(results)
+    final_task_scores = [r["mean_score"] for r in final_results]
+    for s in final_task_scores:
+        if not (0 < s < 1):
+            raise ValueError(f"INVALID SCORE: {s}")
+    print(f"FINAL TASK SCORES: {final_task_scores}", file=sys.stderr)
+
+    return final_results
 
 
 if __name__ == "__main__":
