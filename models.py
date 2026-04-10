@@ -22,6 +22,24 @@ from typing import Any, Dict, List, Literal, Optional, Set
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+def deterministic_timestamp() -> datetime:
+    """Deterministic default timestamp for reproducible outputs."""
+    return datetime.fromtimestamp(0)
+
+
+def safe_score(score: float) -> float:
+    epsilon = 1e-6
+    try:
+        score = float(score)
+    except:
+        return epsilon
+    if score <= 0.0:
+        return epsilon
+    if score >= 1.0:
+        return 1.0 - epsilon
+    return score
+
+
 # =============================================================================
 # Enums
 # =============================================================================
@@ -104,7 +122,7 @@ class EvidenceSnippet(BaseModel):
     source: str = Field(..., description="Where this evidence came from (e.g., 'logs', 'metrics')")
     content: str = Field(..., description="The actual evidence content")
     relevance_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Relevance to current incident")
-    timestamp: datetime = Field(default_factory=datetime.now, description="When evidence was gathered")
+    timestamp: datetime = Field(default_factory=deterministic_timestamp, description="When evidence was gathered")
     agent_role: AgentRole = Field(..., description="Which agent gathered this evidence")
     
     model_config = {"frozen": False}
@@ -127,7 +145,7 @@ class ReasoningStep(BaseModel):
     action_taken: ActionType
     confidence: float = Field(default=0.5, ge=0.0, le=1.0, description="Confidence in this decision")
     evidence_used: List[str] = Field(default_factory=list, description="IDs of evidence used")
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=deterministic_timestamp)
 
 
 # =============================================================================
@@ -144,7 +162,7 @@ class AgentMessage(BaseModel):
     priority: MessagePriority = Field(default=MessagePriority.NORMAL)
     evidence_refs: List[str] = Field(default_factory=list, description="Referenced evidence IDs")
     requires_response: bool = Field(default=False)
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=deterministic_timestamp)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -519,7 +537,7 @@ class ReplayStep(BaseModel):
     observation: DataCenterObservation
     reward: DataCenterReward
     reasoning: Optional[str] = None
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=deterministic_timestamp)
 
 
 class EpisodeResult(BaseModel):
@@ -601,7 +619,7 @@ class GradingResult(BaseModel):
     notes: List[str] = Field(default_factory=list)
     
     # Timestamps
-    graded_at: datetime = Field(default_factory=datetime.now)
+    graded_at: datetime = Field(default_factory=deterministic_timestamp)
 
 
 class BenchmarkResult(BaseModel):
@@ -615,7 +633,7 @@ class BenchmarkResult(BaseModel):
     
     overall_score: float = Field(default=0.0, ge=0.0, le=1.0)
     
-    run_at: datetime = Field(default_factory=datetime.now)
+    run_at: datetime = Field(default_factory=deterministic_timestamp)
     duration_seconds: float = 0.0
 
 

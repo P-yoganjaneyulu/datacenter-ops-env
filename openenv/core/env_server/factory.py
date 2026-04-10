@@ -93,9 +93,30 @@ def create_app(
         
         environment = sessions[episode_id]
         action_obj = action_cls(**action)
-        obs = environment.step(action_obj)
+        result = environment.step(action_obj)
+
+        if isinstance(result, tuple) and len(result) == 5:
+            obs, reward, terminated, truncated, info = result
+        else:
+            obs = result
+            reward = getattr(obs, "last_reward", 0.0) or 0.0
+            terminated = bool(getattr(obs, "done", False))
+            truncated = bool(getattr(obs, "truncated", False))
+            info = {
+                "step": getattr(obs, "step_number", 0),
+                "incidents_resolved": len(getattr(obs, "resolved_incidents", []) or []),
+                "incidents_active": len(getattr(obs, "active_incidents", []) or []),
+                "cascade_count": getattr(obs, "cascade_count", 0),
+                "coordination_score": getattr(obs, "coordination_score", 0.0),
+            }
         
-        return {"observation": obs.model_dump()}
+        return {
+            "observation": obs.model_dump(),
+            "reward": reward,
+            "terminated": terminated,
+            "truncated": truncated,
+            "info": info,
+        }
     
     @app.get("/state")
     async def state(episode_id: str):
