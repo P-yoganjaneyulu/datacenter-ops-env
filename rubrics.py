@@ -32,6 +32,7 @@ from models import (
     EvidenceSnippet,
     Incident,
     RewardBreakdown,
+    safe_score,
     Severity,
     TaskTier,
 )
@@ -95,7 +96,7 @@ class CompositeRubric(Rubric):
         total = 0.0
         for rubric, weight in zip(self.rubrics, self.weights):
             total += weight * rubric.compute(observation, action, prev_state)
-        return total
+        return safe_score(total)
     
     def explain(self, score: float) -> str:
         return f"Composite rubric score: {score:.3f}"
@@ -133,20 +134,20 @@ class IncidentDetectionRubric(Rubric):
         prev_state: Optional[Dict[str, Any]] = None
     ) -> float:
         if action.action_type != ActionType.WATCHER_ALERT:
-            return 0.0
+            return safe_score(0.0)
         
         if prev_state is None:
-            return 0.0
+            return safe_score(0.0)
         
         # Check if there are active incidents that haven't been alerted
         watcher_state = prev_state.get("agent_states", {}).get("watcher", {})
         if watcher_state.get("alert_sent", False):
-            return -0.5  # Duplicate alert penalty
+            return safe_score(-0.5)  # Duplicate alert penalty
         
         # Check if there are active incidents
         active_incidents = prev_state.get("active_incidents", [])
         if not active_incidents:
-            return -0.3  # False alert
+            return safe_score(-0.3)  # False alert
         
         # Calculate timeliness bonus
         incident = active_incidents[0]
@@ -157,7 +158,7 @@ class IncidentDetectionRubric(Rubric):
         severity_map = {"critical": 3, "high": 2, "medium": 1, "low": 0}
         severity_bonus = 0.5 * (severity_map.get(incident.get("severity", "medium").lower(), 1) / 3)
         
-        return 2.0 + timeliness + severity_bonus
+        return safe_score(2.0 + timeliness + severity_bonus)
     
     def explain(self, score: float) -> str:
         if score > 2.0:
@@ -185,20 +186,20 @@ class InvestigationRubric(Rubric):
         prev_state: Optional[Dict[str, Any]] = None
     ) -> float:
         if action.action_type != ActionType.WATCHER_INVESTIGATE:
-            return 0.0
+            return safe_score(0.0)
         
         if prev_state is None:
-            return 0.0
+            return safe_score(0.0)
         
         watcher_state = prev_state.get("agent_states", {}).get("watcher", {})
         
         # Must alert first
         if not watcher_state.get("alert_sent", False):
-            return -1.0  # Investigating without alerting
+            return safe_score(-1.0)  # Investigating without alerting
         
         # Already investigated?
         if watcher_state.get("investigating", False):
-            return -0.5  # Duplicate investigation
+            return safe_score(-0.5)  # Duplicate investigation
         
         # Bonus for evidence gathered
         evidence_count = len([e for e in observation.evidence_gathered 
@@ -211,7 +212,7 @@ class InvestigationRubric(Rubric):
             if evidence.agent_role == AgentRole.WATCHER:
                 evidence_quality += evidence.relevance_score * 0.3
         
-        return 1.5 + evidence_bonus + evidence_quality
+        return safe_score(1.5 + evidence_bonus + evidence_quality)
     
     def explain(self, score: float) -> str:
         if score > 2.0:
@@ -236,21 +237,21 @@ class DiagnosisRubric(Rubric):
         prev_state: Optional[Dict[str, Any]] = None
     ) -> float:
         if action.action_type != ActionType.RESPONDER_DIAGNOSE:
-            return 0.0
+            return safe_score(0.0)
         
         if prev_state is None:
-            return 0.0
+            return safe_score(0.0)
         
         responder_state = prev_state.get("agent_states", {}).get("responder", {})
         watcher_state = prev_state.get("agent_states", {}).get("watcher", {})
         
         # Need prior investigation
         if not watcher_state.get("investigation_complete", False):
-            return -0.8  # Diagnosing without investigation
+            return safe_score(-0.8)  # Diagnosing without investigation
         
         # Already diagnosed?
         if responder_state.get("diagnosis_complete", False):
-            return -0.4  # Duplicate diagnosis
+            return safe_score(-0.4)  # Duplicate diagnosis
         
         # Evidence used in diagnosis
         evidence_used = len(observation.reasoning_trace[-1].evidence_used) if observation.reasoning_trace else 0
@@ -261,7 +262,7 @@ class DiagnosisRubric(Rubric):
         if action.reasoning and len(action.reasoning) > 20:
             reasoning_bonus = 0.3
         
-        return 1.5 + evidence_bonus + reasoning_bonus
+        return safe_score(1.5 + evidence_bonus + reasoning_bonus)
     
     def explain(self, score: float) -> str:
         if score > 2.0:
@@ -286,10 +287,10 @@ class DispatchRubric(Rubric):
         prev_state: Optional[Dict[str, Any]] = None
     ) -> float:
         if action.action_type != ActionType.COORDINATOR_DISPATCH:
-            return 0.0
+            return safe_score(0.0)
         
         if prev_state is None:
-            return 0.0
+            return safe_score(0.0)
         
         coordinator_state = prev_state.get("agent_states", {}).get("coordinator", {})
         responder_state = prev_state.get("agent_states", {}).get("responder", {})
@@ -309,17 +310,17 @@ class DispatchRubric(Rubric):
                 not responder_state.get("diagnosis_complete", False),
                 not responder_state.get("help_requested", False),
             ])
-            return -0.4 * missing
+            return safe_score(-0.4 * missing)
         
         # Check technician availability
         if observation.technicians_available <= 0:
-            return -0.3  # No technicians available
+            return safe_score(-0.3)  # No technicians available
         
         # Check for unassigned incidents
         unassigned = [i for i in observation.active_incidents 
                      if not i.assigned_technician]
         if not unassigned:
-            return -0.2  # No incidents to dispatch to
+            return safe_score(-0.2)  # No incidents to dispatch to
         
         # Specialist matching bonus
         incident = unassigned[0]
@@ -328,9 +329,9 @@ class DispatchRubric(Rubric):
             technicians = prev_state.get("technicians", [])
             tech = next((t for t in technicians if t["id"] == action.technician_id), None)
             if tech and incident.incident_type.value in tech.get("specialization", ""):
-                return 2.5  # Specialist match bonus
+                return safe_score(2.5)  # Specialist match bonus
         
-        return 2.0
+        return safe_score(2.0)
     
     def explain(self, score: float) -> str:
         if score > 2.0:
@@ -358,10 +359,10 @@ class ResolutionRubric(Rubric):
         prev_state: Optional[Dict[str, Any]] = None
     ) -> float:
         if action.action_type != ActionType.COORDINATOR_RESOLVE:
-            return 0.0
+            return safe_score(0.0)
         
         if prev_state is None:
-            return 0.0
+            return safe_score(0.0)
         
         # Find resolvable incidents
         resolvable = []
@@ -394,9 +395,9 @@ class ResolutionRubric(Rubric):
             return base + speed_bonus + severity_bonus
         
         elif too_early:
-            return -0.3  # Technician not done yet
+            return safe_score(-0.3)  # Technician not done yet
         
-        return -0.6  # No incident to resolve
+        return safe_score(-0.6)  # No incident to resolve
     
     def explain(self, score: float) -> str:
         if score > 15.0:
@@ -435,7 +436,7 @@ class OrderingRubric(Rubric):
         prev_state: Optional[Dict[str, Any]] = None
     ) -> float:
         if prev_state is None:
-            return 0.0
+            return safe_score(0.0)
         
         # Check if action is in correct order
         action_idx = None
@@ -445,7 +446,7 @@ class OrderingRubric(Rubric):
                 break
         
         if action_idx is None:
-            return 0.0  # Not a sequenced action
+            return safe_score(0.0)  # Not a sequenced action
         
         # Check prerequisites
         required_complete = True
@@ -464,9 +465,9 @@ class OrderingRubric(Rubric):
                 required_complete = prev_state.get("dispatch_complete", False)
             
             if not required_complete:
-                return -0.5 * (action_idx - i)  # Penalty proportional to skip
+                return safe_score(-0.5 * (action_idx - i))  # Penalty proportional to skip
         
-        return 0.3  # Small bonus for correct ordering
+        return safe_score(0.3)  # Small bonus for correct ordering
     
     def explain(self, score: float) -> str:
         if score > 0:
@@ -507,6 +508,13 @@ class CoordinationRubric(Rubric):
         total_messages = len(observation.message_history)
         if total_messages > 10:
             score -= 0.1 * (total_messages - 10)  # Spam penalty
+
+        # Penalize repetitive coordination chatter while incidents remain unresolved
+        if action.action_type == ActionType.COORDINATOR_MESSAGE and observation.active_incidents:
+            if len(observation.message_history) >= 2:
+                last_two = [m.message_type for m in observation.message_history[-2:]]
+                if last_two == ["coordination", "coordination"]:
+                    score -= 0.4
         
         return score
     
@@ -536,7 +544,7 @@ class EvidenceQualityRubric(Rubric):
             ActionType.WATCHER_INVESTIGATE,
             ActionType.RESPONDER_DIAGNOSE,
         ]:
-            return 0.0
+            return safe_score(0.0)
         
         # Get evidence from this action
         new_evidence = [e for e in observation.evidence_gathered 
@@ -545,7 +553,7 @@ class EvidenceQualityRubric(Rubric):
                         len(prev_state.get("evidence", [])) < len(observation.evidence_gathered))]
         
         if not new_evidence:
-            return 0.0
+            return safe_score(0.0)
         
         # Score based on relevance and coverage
         relevance = sum(e.relevance_score for e in new_evidence) / len(new_evidence)
@@ -554,7 +562,7 @@ class EvidenceQualityRubric(Rubric):
         sources = set(e.source for e in new_evidence)
         diversity_bonus = min(0.5, len(sources) * 0.15)
         
-        return relevance * 0.5 + diversity_bonus
+        return safe_score(relevance * 0.5 + diversity_bonus)
     
     def explain(self, score: float) -> str:
         if score > 0.5:
@@ -562,6 +570,45 @@ class EvidenceQualityRubric(Rubric):
         elif score > 0:
             return f"Some useful evidence (+{score:.2f})"
         return "No evidence gathered (0.00)"
+
+
+class StagnationRubric(Rubric):
+    """Penalizes passive/no-progress actions when urgent incidents exist."""
+
+    name = "stagnation"
+    description = "Penalizes no-op behavior under active incident pressure"
+
+    def compute(
+        self,
+        observation: DataCenterObservation,
+        action: DataCenterAction,
+        prev_state: Optional[Dict[str, Any]] = None
+    ) -> float:
+        if not observation.active_incidents:
+            return safe_score(0.0)
+
+        severity_weight = {"critical": 1.4, "high": 1.0, "medium": 0.6, "low": 0.3}
+        max_pressure = 0.0
+        for incident in observation.active_incidents:
+            age = max(0, observation.step_number - incident.step_started)
+            sev = severity_weight.get(incident.severity.value, 0.6)
+            pressure = sev + min(1.0, age / 20.0)
+            max_pressure = max(max_pressure, pressure)
+
+        passive_actions = {
+            ActionType.WATCHER_MONITOR,
+            ActionType.RESPONDER_FIX,
+            ActionType.COORDINATOR_MESSAGE,
+        }
+        if action.action_type in passive_actions:
+            return safe_score(-0.4 * max_pressure)
+
+        return safe_score(0.0)
+
+    def explain(self, score: float) -> str:
+        if score < 0:
+            return f"Passive action under incident pressure ({score:.2f})"
+        return "No stagnation penalty (0.00)"
 
 
 # =============================================================================
@@ -589,7 +636,7 @@ class SLARubric(Rubric):
         prev_state: Optional[Dict[str, Any]] = None
     ) -> float:
         if not observation.active_incidents:
-            return 0.0
+            return safe_score(0.0)
         
         penalty = 0.0
         
@@ -643,6 +690,7 @@ class DataCenterRubric(CompositeRubric):
             OrderingRubric(),
             CoordinationRubric(),
             EvidenceQualityRubric(),
+            StagnationRubric(),
             SLARubric(),
         ]
         
@@ -655,6 +703,7 @@ class DataCenterRubric(CompositeRubric):
             0.5,  # ordering
             0.5,  # coordination
             0.3,  # evidence quality
+            0.8,  # stagnation
             1.0,  # SLA
         ]
         
@@ -699,6 +748,9 @@ class DataCenterRubric(CompositeRubric):
                 breakdown.coordination_bonus = max(0, score)
             elif rubric.name == "evidence_quality":
                 breakdown.evidence_quality = max(0, score)
+            elif rubric.name == "stagnation":
+                if score < 0:
+                    breakdown.time_penalty += abs(score)
             elif rubric.name == "sla":
                 if score < 0:
                     breakdown.sla_penalty = abs(score)
