@@ -27,6 +27,19 @@ def deterministic_timestamp() -> datetime:
     return datetime.fromtimestamp(0)
 
 
+def safe_score(score: float) -> float:
+    epsilon = 1e-6
+    try:
+        score = float(score)
+    except:
+        return epsilon
+    if score <= 0.0:
+        return epsilon
+    if score >= 1.0:
+        return 1.0 - epsilon
+    return score
+
+
 # =============================================================================
 # Enums
 # =============================================================================

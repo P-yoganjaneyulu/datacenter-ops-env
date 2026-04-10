@@ -31,7 +31,7 @@ from typing import Dict, List, Tuple
 from openai import OpenAI
 import httpx
 
-from models import ActionType, DataCenterAction
+from models import ActionType, DataCenterAction, safe_score
 
 # ---------------------------------------------------------------------------
 # Configuration (from environment variables as per hackathon requirements)
@@ -50,19 +50,6 @@ MAX_TOKENS = 150
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 USE_LLM = os.getenv("USE_LLM", "true").lower() == "true"
 
-
-def safe_score(score: float) -> float:
-    """Ensure scores are strictly within (0,1) for validator compliance."""
-    epsilon = 1e-6
-    try:
-        score = float(score)
-    except Exception:
-        return epsilon
-    if score <= 0.0:
-        return epsilon
-    if score >= 1.0:
-        return 1.0 - epsilon
-    return score
 
 # ---------------------------------------------------------------------------
 # LLM Agent
