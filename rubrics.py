@@ -585,7 +585,7 @@ class StagnationRubric(Rubric):
         prev_state: Optional[Dict[str, Any]] = None
     ) -> float:
         if not observation.active_incidents:
-            return safe_score(0.0)
+            return 0.0
 
         severity_weight = {"critical": 1.4, "high": 1.0, "medium": 0.6, "low": 0.3}
         max_pressure = 0.0
@@ -601,9 +601,9 @@ class StagnationRubric(Rubric):
             ActionType.COORDINATOR_MESSAGE,
         }
         if action.action_type in passive_actions:
-            return safe_score(-0.4 * max_pressure)
+            return -0.4 * max_pressure
 
-        return safe_score(0.0)
+        return 0.0
 
     def explain(self, score: float) -> str:
         if score < 0:
