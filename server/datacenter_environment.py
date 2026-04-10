@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from openenv.core.env_server.interfaces import Environment
 
 from models import (
-    DataCenterAction, DataCenterObservation, DataCenterState,
+    AgentRole, DataCenterAction, DataCenterObservation, DataCenterState, MetricsObservation,
     TaskTier
 )
 from environment import DataCenterOpsEnv  # Gymnasium simulation engine
@@ -112,14 +112,14 @@ class DataCenterEnvironment(Environment[DataCenterAction, DataCenterObservation,
                 seed=None,
                 step_number=0,
                 max_steps=0,
-                current_agent=None,
+                current_agent=AgentRole.WATCHER,
                 equipment=[],
                 incidents=[],
                 technicians=[],
                 agent_states={},
                 message_history=[],
                 all_evidence=[],
-                metrics=None,
+                metrics=MetricsObservation(),
                 total_reward=0.0,
                 coordination_score=0.0,
                 cascade_count=0,
