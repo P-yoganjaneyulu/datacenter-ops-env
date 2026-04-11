@@ -986,7 +986,8 @@ class DataCenterOpsEnv:
         bonus = 0.0
         
         # Coordination bonus
-        self.coordination_score = min(1.0, self.coordination_events / 8.0)
+        raw_coord = min(1.0, self.coordination_events / 8.0)
+        self.coordination_score = safe_score(raw_coord)
         bonus += self.coordination_score * 5.0
         
         # Resolution bonus

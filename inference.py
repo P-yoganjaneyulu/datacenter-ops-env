@@ -490,11 +490,16 @@ def main():
     print("=" * 60, file=sys.stderr)
 
     def _clamp_score_fields(value):
+        """Recursively clamp all fields that could be interpreted as a score or rate."""
         if isinstance(value, dict):
-            return {
-                k: (safe_score(v) if isinstance(v, (int, float)) and "score" in k else _clamp_score_fields(v))
-                for k, v in value.items()
-            }
+            new_dict = {}
+            for k, v in value.items():
+                is_metric_key = any(m in k.lower() for m in ["score", "rate", "efficiency", "coordination"])
+                if is_metric_key and isinstance(v, (int, float)):
+                    new_dict[k] = safe_score(v)
+                else:
+                    new_dict[k] = _clamp_score_fields(v)
+            return new_dict
         if isinstance(value, list):
             return [_clamp_score_fields(v) for v in value]
         return value

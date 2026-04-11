@@ -292,37 +292,39 @@ class Grader:
         
         # Compute final score
         avg_reward = sum(rewards) / len(rewards) if rewards else 0
-        resolution_rate = sum(resolutions) / len(resolutions) if resolutions else 0
-        avg_coordination = sum(coordination_scores) / len(coordination_scores) if coordination_scores else 0
+        resolution_rate_raw = sum(resolutions) / len(resolutions) if resolutions else 0
+        avg_coordination_raw = sum(coordination_scores) / len(coordination_scores) if coordination_scores else 0
         
         # Score formula: weighted combination
-        score = (
-            0.4 * resolution_rate +
+        score_raw = (
+            0.4 * resolution_rate_raw +
             0.3 * min(1.0, avg_reward / 20.0) +  # Normalize reward
-            0.3 * avg_coordination
+            0.3 * avg_coordination_raw
         )
         
-        # Clamp score strictly within (0, 1) as per hackathon requirements
-        score = safe_score(score)
+        # Clamp ALL metrics strictly within (0, 1)
+        score = safe_score(score_raw)
+        resolution_rate = safe_score(resolution_rate_raw)
+        coordination_score = safe_score(avg_coordination_raw)
         
         passed = (
-            resolution_rate >= task.min_resolution_rate and
-            avg_coordination >= task.min_coordination_score
+            resolution_rate_raw >= task.min_resolution_rate and
+            avg_coordination_raw >= task.min_coordination_score
         )
         
         return GradingResult(
             task_id=task_id,
             tier=task.tier,
-            score=round(score, 3),
+            score=score,
             passed=passed,
             episodes_run=self.n_episodes,
             avg_reward=round(avg_reward, 3),
-            resolution_rate=round(resolution_rate, 3),
-            coordination_score=round(avg_coordination, 3),
+            resolution_rate=resolution_rate,
+            coordination_score=coordination_score,
             breakdown={
                 "avg_reward": round(avg_reward, 3),
-                "resolution_rate": round(resolution_rate, 3),
-                "coordination_score": round(avg_coordination, 3),
+                "resolution_rate": resolution_rate,
+                "coordination_score": coordination_score,
             },
             notes=notes,
         )
@@ -368,7 +370,8 @@ class Grader:
         duration = time.time() - start_time
         
         # Compute overall score
-        overall = sum(r.score for r in results.values()) / len(results)
+        overall_raw = sum(r.score for r in results.values()) / len(results)
+        overall = safe_score(overall_raw)
         
         return BenchmarkResult(
             agent_type=agent_type,
@@ -376,7 +379,7 @@ class Grader:
             easy=results.get("easy"),
             medium=results.get("medium"),
             hard=results.get("hard"),
-            overall_score=round(overall, 3),
+            overall_score=overall,
             duration_seconds=round(duration, 2),
         )
 

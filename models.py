@@ -27,16 +27,28 @@ def deterministic_timestamp() -> datetime:
     return datetime.fromtimestamp(0)
 
 
+import math
+
+
 def safe_score(score: float) -> float:
-    epsilon = 1e-6
+    """
+    Ensure a score is strictly within the range (0, 1).
+    Uses a larger epsilon (0.001) to remain safe even if rounded to 3 decimals.
+    """
+    epsilon = 0.001
     try:
         score = float(score)
-    except:
+    except (ValueError, TypeError):
         return epsilon
-    if score <= 0.0:
+        
+    if math.isnan(score) or math.isinf(score):
         return epsilon
-    if score >= 1.0:
+        
+    if score <= epsilon:
+        return epsilon
+    if score >= (1.0 - epsilon):
         return 1.0 - epsilon
+        
     return score
 
 
