@@ -85,92 +85,142 @@ class HeuristicAgent:
         self.env = env
 
     def act(self, obs, info: dict) -> DataCenterAction:
-        """Select optimal action based on pipeline state."""
+        """Select optimal action based on priority and pipeline state."""
+        from models import Severity
+        
+        # Helper: Check if incident has been alerted
+        def is_alerted(inc_id):
+            return any(m.message_type == "alert" and f"#{inc_id}" in m.content for m in obs.message_history)
+        
+        # Helper: Check if incident has been investigated
+        def is_investigated(inc_id):
+            return any(m.message_type == "investigation_complete" and f"#{inc_id}" in m.content for m in obs.message_history)
+
+        # Helper: Check if help has been requested
+        def is_help_requested(inc_id):
+            return any(m.message_type == "help_request" and f"#{inc_id}" in m.content for m in obs.message_history)
+        
+        # Sort active incidents by priority (Severity + Age)
+        def get_priority(inc):
+            sev_map = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+            age = (obs.step_number - inc.step_started) / 20.0
+            return sev_map.get(inc.severity.value, 1) + age
+
+        ranked_incidents = sorted(obs.active_incidents, key=get_priority, reverse=True)
+        
+        # Find the best target for the current agent's stage
         state = self.env.state()
-        
-        # Get agent states
-        agent_states = {
-            "watcher": state.agent_states.get("watcher"),
-            "responder": state.agent_states.get("responder"),
-            "coordinator": state.agent_states.get("coordinator"),
-        }
-        
-        w = agent_states["watcher"]
-        r = agent_states["responder"]
-        c = agent_states["coordinator"]
+        w = state.agent_states.get("watcher")
+        r = state.agent_states.get("responder")
+        c = state.agent_states.get("coordinator")
         
         current_agent = obs.current_agent
         
         # ── WATCHER TURN ──────────────────────────────────────────────
         if current_agent == AgentRole.WATCHER:
-            if obs.active_incidents and not w.alert_sent:
-                return DataCenterAction(
-                    action_type=ActionType.WATCHER_ALERT,
-                    reasoning="Active incident detected, sending alert",
-                    confidence=0.9,
-                )
-            if w.alert_sent and not w.investigation_complete:
-                return DataCenterAction(
-                    action_type=ActionType.WATCHER_INVESTIGATE,
-                    reasoning="Investigating reported incident",
-                    confidence=0.85,
-                )
+            # Watcher's job: Alert then Investigate
+            for inc in ranked_incidents:
+                if not is_alerted(inc.id):
+                    return DataCenterAction(
+                        action_type=ActionType.WATCHER_ALERT,
+                        incident_id=inc.id,
+                        reasoning=f"New {inc.severity.value} incident #{inc.id} detected on {inc.equipment_name}. Alerting team.",
+                        confidence=0.95,
+                    )
+            
+            for inc in ranked_incidents:
+                if is_alerted(inc.id) and not is_investigated(inc.id):
+                    return DataCenterAction(
+                        action_type=ActionType.WATCHER_INVESTIGATE,
+                        incident_id=inc.id,
+                        reasoning=f"Investigating alerted incident #{inc.id} on {inc.equipment_name} for root cause.",
+                        confidence=0.9,
+                    )
+                    
             return DataCenterAction(
                 action_type=ActionType.WATCHER_MONITOR,
-                reasoning="Monitoring system status",
+                reasoning="Monitoring system status.",
                 confidence=0.6,
             )
 
         # ── RESPONDER TURN ────────────────────────────────────────────
         if current_agent == AgentRole.RESPONDER:
-            if w.investigation_complete and not r.diagnosis_complete:
-                return DataCenterAction(
-                    action_type=ActionType.RESPONDER_DIAGNOSE,
-                    reasoning="Diagnosing based on investigation results",
-                    confidence=0.85,
-                )
-            if r.diagnosis_complete and not r.help_requested:
-                return DataCenterAction(
-                    action_type=ActionType.RESPONDER_REQUEST_HELP,
-                    reasoning="Requesting coordinator assistance for manual fix",
-                    confidence=0.8,
-                )
+            # Responder's job: Diagnose then Request Help
+            for inc in ranked_incidents:
+                if is_investigated(inc.id) and not is_help_requested(inc.id):
+                    if not r.diagnosis_complete:
+                         return DataCenterAction(
+                            action_type=ActionType.RESPONDER_DIAGNOSE,
+                            incident_id=inc.id,
+                            reasoning=f"Diagnosing incident #{inc.id} on {inc.equipment_name}.",
+                            confidence=0.9,
+                        )
+                    
+                    return DataCenterAction(
+                        action_type=ActionType.RESPONDER_REQUEST_HELP,
+                        incident_id=inc.id,
+                        reasoning=f"Requesting technician for incident #{inc.id} after diagnosis.",
+                        confidence=0.85,
+                    )
+            
             return DataCenterAction(
                 action_type=ActionType.RESPONDER_FIX,
-                reasoning="Attempting automated fix",
+                reasoning="Standby for investigations.",
                 confidence=0.5,
             )
 
         # ── COORDINATOR TURN ──────────────────────────────────────────
         if current_agent == AgentRole.COORDINATOR:
-            # Check if can resolve
-            for incident in obs.active_incidents:
-                if incident.assigned_technician and incident.dispatch_step:
+            # 1. Resolve completed repairs
+            for inc in ranked_incidents:
+                if inc.assigned_technician and inc.dispatch_step is not None:
                     from environment import TASK_CONFIG
-                    steps_since = obs.step_number - incident.dispatch_step
+                    steps_since = obs.step_number - inc.dispatch_step
                     repair_steps = TASK_CONFIG[obs.task_tier]["repair_steps"]
                     if steps_since >= repair_steps:
                         return DataCenterAction(
                             action_type=ActionType.COORDINATOR_RESOLVE,
-                            reasoning=f"Technician has completed repair work",
-                            confidence=0.95,
+                            incident_id=inc.id,
+                            reasoning=f"Repair complete for incident #{inc.id}. Resolving.",
+                            confidence=0.98,
                         )
-            
-            # Check if can dispatch
-            if (w.alert_sent and w.investigation_complete and 
-                r.diagnosis_complete and r.help_requested and
-                not c.dispatch_complete and obs.technicians_available > 0):
-                return DataCenterAction(
-                    action_type=ActionType.COORDINATOR_DISPATCH,
-                    reasoning="Dispatching technician to resolve incident",
-                    confidence=0.9,
-                )
-            
-            # Otherwise coordinate
+
+            # 2. Dispatch for help requests
+            for inc in ranked_incidents:
+                if not inc.assigned_technician and is_help_requested(inc.id):
+                    if obs.technicians_available > 0:
+                        # Specialist matching
+                        best_tech = None
+                        available_techs = [t for t in state.technicians if t.available]
+                        for tech in available_techs:
+                            if inc.incident_type.value in tech.specialization:
+                                best_tech = tech
+                                break
+                        tech_id = best_tech.id if best_tech else available_techs[0].id
+                        
+                        return DataCenterAction(
+                            action_type=ActionType.COORDINATOR_DISPATCH,
+                            incident_id=inc.id,
+                            technician_id=tech_id,
+                            reasoning=f"Dispatching specialist to incident #{inc.id}.",
+                            confidence=0.92,
+                        )
+
+            # 3. Escalate high severity
+            if not c.escalated:
+                for inc in ranked_incidents:
+                    if inc.severity in [Severity.HIGH, Severity.CRITICAL]:
+                        return DataCenterAction(
+                            action_type=ActionType.COORDINATOR_ESCALATE,
+                            incident_id=inc.id,
+                            reasoning=f"Escalating {inc.severity.value} incident #{inc.id}.",
+                            confidence=0.8,
+                        )
+
             return DataCenterAction(
                 action_type=ActionType.COORDINATOR_MESSAGE,
-                message="Status check: all teams please report",
-                reasoning="Coordinating team efforts",
+                message="Team status sync.",
+                reasoning="Coordinating response.",
                 confidence=0.5,
             )
 

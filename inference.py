@@ -217,69 +217,163 @@ def action_from_index(value) -> ActionType:
 
 
 def _incident_priority(obs, incident) -> float:
-    severity_weight = {"low": 1.0, "medium": 2.0, "high": 3.5, "critical": 5.0}
-    age = max(0, obs.step_number - incident.step_started)
-    return severity_weight.get(incident.severity.value, 2.0) + 0.25 * age
+    sev_map = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+    age = (obs.step_number - incident.step_started) / 20.0
+    return sev_map.get(incident.severity.value, 1) + age
 
 
-def heuristic_action(obs, memory: dict | None = None) -> ActionType:
+def heuristic_action(obs, state=None, memory: dict | None = None) -> ActionType:
+    from models import Severity
     memory = memory or {}
     watcher = obs.agent_states.get("watcher")
     responder = obs.agent_states.get("responder")
+    coordinator = obs.agent_states.get("coordinator")
+    
     ranked = sorted(obs.active_incidents, key=lambda i: _incident_priority(obs, i), reverse=True)
-    highest = ranked[0] if ranked else None
+    target = ranked[0] if ranked else None
     repair_steps = REPAIR_STEPS.get(obs.task_tier.value, 4)
-    urgency = _incident_priority(obs, highest) if highest else 0.0
-    active_count = len(obs.active_incidents)
+
     scores = {a: 0.0 for a in obs.valid_actions}
 
     if obs.current_agent.value == "watcher":
-        if ActionType.WATCHER_ALERT in scores:
-            scores[ActionType.WATCHER_ALERT] += 7.0 if (highest and not (watcher and watcher.alert_sent)) else -2.0
-            if highest and highest.severity.value in {"high", "critical"}:
-                scores[ActionType.WATCHER_ALERT] += 1.5
-        if ActionType.WATCHER_INVESTIGATE in scores:
-            scores[ActionType.WATCHER_INVESTIGATE] += 6.0 if (watcher and watcher.alert_sent and not watcher.investigation_complete) else -1.0
-            scores[ActionType.WATCHER_INVESTIGATE] += min(2.0, 0.2 * urgency)
-        if ActionType.WATCHER_MONITOR in scores:
-            scores[ActionType.WATCHER_MONITOR] += -0.5 * active_count
+        if target:
+            if not watcher.alert_sent:
+                scores[ActionType.WATCHER_ALERT] += 10.0
+            elif not watcher.investigation_complete:
+                scores[ActionType.WATCHER_INVESTIGATE] += 9.0
+        scores[ActionType.WATCHER_MONITOR] += 1.0
 
     elif obs.current_agent.value == "responder":
-        if ActionType.RESPONDER_DIAGNOSE in scores:
-            ready = watcher and watcher.investigation_complete and responder and not responder.diagnosis_complete
-            scores[ActionType.RESPONDER_DIAGNOSE] += 7.0 if ready else -2.0
-            scores[ActionType.RESPONDER_DIAGNOSE] += min(1.5, 0.15 * urgency)
-        if ActionType.RESPONDER_REQUEST_HELP in scores:
-            can_help = responder and responder.diagnosis_complete and not responder.help_requested
-            scores[ActionType.RESPONDER_REQUEST_HELP] += 6.0 if can_help else -1.0
-        if ActionType.RESPONDER_FIX in scores:
-            scores[ActionType.RESPONDER_FIX] += 1.0 if (responder and responder.diagnosis_complete) else -0.5
+        if target and watcher.investigation_complete:
+            if not responder.diagnosis_complete:
+                scores[ActionType.RESPONDER_DIAGNOSE] += 10.0
+            elif not responder.help_requested:
+                scores[ActionType.RESPONDER_REQUEST_HELP] += 9.0
+        scores[ActionType.RESPONDER_FIX] += 1.0
 
-    else:
-        resolvable = any(
-            inc.assigned_technician and inc.dispatch_step is not None and (obs.step_number - inc.dispatch_step) >= repair_steps
-            for inc in ranked
-        )
-        pipeline_ready = bool(
-            watcher and watcher.alert_sent and watcher.investigation_complete
-            and responder and responder.diagnosis_complete and responder.help_requested
-        )
-        unassigned = any(not inc.assigned_technician for inc in ranked)
-        critical_open = any(inc.severity.value in {"high", "critical"} for inc in ranked)
-
-        if ActionType.COORDINATOR_RESOLVE in scores:
-            scores[ActionType.COORDINATOR_RESOLVE] += 9.0 if resolvable else -2.0
-            if memory.get("stalled_turns", 0) >= 2:
-                scores[ActionType.COORDINATOR_RESOLVE] += 1.5
-        if ActionType.COORDINATOR_DISPATCH in scores:
-            scores[ActionType.COORDINATOR_DISPATCH] += 7.0 if (pipeline_ready and unassigned and obs.technicians_available > 0) else -1.0
-            scores[ActionType.COORDINATOR_DISPATCH] += min(2.0, 0.2 * urgency)
-        if ActionType.COORDINATOR_ESCALATE in scores:
-            scores[ActionType.COORDINATOR_ESCALATE] += 3.5 if critical_open else -0.5
-        if ActionType.COORDINATOR_MESSAGE in scores:
-            scores[ActionType.COORDINATOR_MESSAGE] += -0.8 * active_count
+    else: # Coordinator
+        # 1. Resolution
+        for inc in ranked:
+            if inc.assigned_technician and inc.dispatch_step is not None:
+                if (obs.step_number - inc.dispatch_step) >= repair_steps:
+                    scores[ActionType.COORDINATOR_RESOLVE] += 15.0 # Highest priority
+                    # Target specific incident if possible
+                    # (Heuristic return is just ActionType, but we'll return the type)
+        
+        # 2. Dispatch
+        if target and responder.help_requested and not coordinator.dispatch_complete and obs.technicians_available > 0:
+            scores[ActionType.COORDINATOR_DISPATCH] += 10.0
+            
+        # 3. Escalate
+        if target and target.severity in [Severity.HIGH, Severity.CRITICAL] and not coordinator.escalated:
+            scores[ActionType.COORDINATOR_ESCALATE] += 5.0
+            
+        scores[ActionType.COORDINATOR_MESSAGE] += 1.0
 
     return max(scores, key=scores.get)
+
+
+def heuristic_action_with_details(obs, state=None, memory: dict | None = None) -> DataCenterAction:
+    """Enhanced version that returns full DataCenterAction with IDs."""
+    from models import Severity, ActionType, AgentRole
+    memory = memory or {}
+    
+    # Helpers
+    def is_alerted(inc_id):
+        return any(m.message_type == "alert" and f"#{inc_id}" in m.content for m in obs.message_history)
+    
+    def is_investigated(inc_id):
+        return any(m.message_type == "investigation_complete" and f"#{inc_id}" in m.content for m in obs.message_history)
+
+    def is_help_requested(inc_id):
+        return any(m.message_type == "help_request" and f"#{inc_id}" in m.content for m in obs.message_history)
+    
+    def get_priority(inc):
+        sev_map = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+        age = (obs.step_number - inc.step_started) / 20.0
+        return sev_map.get(inc.severity.value, 1) + age
+
+    ranked = sorted(obs.active_incidents, key=get_priority, reverse=True)
+    repair_steps = REPAIR_STEPS.get(obs.task_tier.value, 4)
+
+    watcher = obs.agent_states.get("watcher")
+    responder = obs.agent_states.get("responder")
+    coordinator = obs.agent_states.get("coordinator")
+
+    if obs.current_agent.value == "watcher":
+        for inc in ranked:
+            if not is_alerted(inc.id):
+                return DataCenterAction(
+                    action_type=ActionType.WATCHER_ALERT,
+                    incident_id=inc.id,
+                    reasoning=f"Alerting team about incident #{inc.id} on {inc.equipment_name}"
+                )
+        for inc in ranked:
+            if is_alerted(inc.id) and not is_investigated(inc.id):
+                return DataCenterAction(
+                    action_type=ActionType.WATCHER_INVESTIGATE,
+                    incident_id=inc.id,
+                    reasoning=f"Investigating incident #{inc.id} for root cause analysis"
+                )
+        return DataCenterAction(action_type=ActionType.WATCHER_MONITOR)
+
+    elif obs.current_agent.value == "responder":
+        for inc in ranked:
+            if is_investigated(inc.id) and not is_help_requested(inc.id):
+                if not responder.diagnosis_complete:
+                    return DataCenterAction(
+                        action_type=ActionType.RESPONDER_DIAGNOSE,
+                        incident_id=inc.id,
+                        reasoning=f"Diagnosing incident #{inc.id} on {inc.equipment_name}"
+                    )
+                return DataCenterAction(
+                    action_type=ActionType.RESPONDER_REQUEST_HELP,
+                    incident_id=inc.id,
+                    reasoning=f"Requesting technician for incident #{inc.id}"
+                )
+        return DataCenterAction(action_type=ActionType.RESPONDER_FIX)
+
+    else: # Coordinator
+        for inc in ranked:
+            if inc.assigned_technician and inc.dispatch_step is not None:
+                if (obs.step_number - inc.dispatch_step) >= repair_steps:
+                    return DataCenterAction(
+                        action_type=ActionType.COORDINATOR_RESOLVE,
+                        incident_id=inc.id,
+                        reasoning=f"Resolving incident #{inc.id} - repair complete"
+                    )
+        
+        for inc in ranked:
+            if not inc.assigned_technician and is_help_requested(inc.id):
+                if obs.technicians_available > 0:
+                    tech_id = None
+                    if state:
+                        available_techs = [t for t in state.technicians if t.available]
+                        for tech in available_techs:
+                            if inc.incident_type.value in tech.specialization:
+                                tech_id = tech.id
+                                break
+                        if not tech_id and available_techs:
+                            tech_id = available_techs[0].id
+
+                    return DataCenterAction(
+                        action_type=ActionType.COORDINATOR_DISPATCH,
+                        incident_id=inc.id,
+                        technician_id=tech_id,
+                        reasoning=f"Dispatching specialist to incident #{inc.id}"
+                    )
+            
+        if not coordinator.escalated:
+            for inc in ranked:
+                if inc.severity in [Severity.HIGH, Severity.CRITICAL]:
+                    return DataCenterAction(
+                        action_type=ActionType.COORDINATOR_ESCALATE,
+                        incident_id=inc.id,
+                        reasoning=f"Escalating high-priority incident #{inc.id}"
+                    )
+            
+        return DataCenterAction(action_type=ActionType.COORDINATOR_MESSAGE, message="Team sync")
+
 
 
 def to_obs(obj: dict):
@@ -351,9 +445,9 @@ def run_episode(task: str, seed: int = 42) -> dict:
                 action_int = agent.act(obs, state, info)
                 action = DataCenterAction(action_type=action_from_index(action_int))
             else:
-                action = DataCenterAction(action_type=heuristic_action(obs, policy_memory))
+                action = heuristic_action_with_details(obs, state, policy_memory)
         except Exception as e:
-            action = DataCenterAction(action_type=heuristic_action(obs, policy_memory))
+            action = heuristic_action_with_details(obs, state, policy_memory)
             last_error = str(e)
 
         try:

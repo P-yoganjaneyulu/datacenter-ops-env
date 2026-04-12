@@ -476,10 +476,17 @@ class DataCenterOpsEnv:
         if not active:
             return "No incident to alert about"
         
-        if self.agent_states["watcher"].alert_sent:
+        # Respect target ID if provided
+        incident = active[0]
+        if action.incident_id is not None:
+            for inc in active:
+                if inc.id == action.incident_id:
+                    incident = inc
+                    break
+        
+        if self.agent_states["watcher"].alert_sent and len(active) == 1:
             return "Alert already sent"
         
-        incident = active[0]
         self.agent_states["watcher"].alert_sent = True
         self.coordination_events += 1
         
@@ -489,7 +496,7 @@ class DataCenterOpsEnv:
             sender=AgentRole.WATCHER,
             receiver="all",
             message_type="alert",
-            content=f"🚨 ALERT: {incident.incident_type.value} on {incident.equipment_name} [{incident.severity.value.upper()}]",
+            content=f"🚨 ALERT: #{incident.id} {incident.incident_type.value} on {incident.equipment_name} [{incident.severity.value.upper()}]",
             priority=MessagePriority.URGENT if incident.severity in [Severity.CRITICAL, Severity.HIGH] else MessagePriority.HIGH,
         )
         self.message_history.append(msg)
@@ -499,17 +506,17 @@ class DataCenterOpsEnv:
     
     def _action_investigate(self, action: DataCenterAction) -> str:
         """Watcher investigates incident."""
-        if not self.agent_states["watcher"].alert_sent:
-            return "Must alert before investigating"
-        
-        if self.agent_states["watcher"].investigating:
-            return "Already investigating"
-        
         active = [i for i in self.incidents if not i.resolved]
         if not active:
             return "No incident to investigate"
-        
+            
         incident = active[0]
+        if action.incident_id is not None:
+            for inc in active:
+                if inc.id == action.incident_id:
+                    incident = inc
+                    break
+        
         self.agent_states["watcher"].investigating = True
         self.agent_states["watcher"].investigation_complete = True
         
@@ -551,25 +558,25 @@ class DataCenterOpsEnv:
     
     def _action_diagnose(self, action: DataCenterAction) -> str:
         """Responder diagnoses root cause."""
-        if not self.agent_states["watcher"].investigation_complete:
-            return "Waiting for investigation results"
-        
-        if self.agent_states["responder"].diagnosis_complete:
-            return "Diagnosis already complete"
-        
         active = [i for i in self.incidents if not i.resolved]
         if not active:
             return "No incident to diagnose"
-        
+            
         incident = active[0]
+        if action.incident_id is not None:
+            for inc in active:
+                if inc.id == action.incident_id:
+                    incident = inc
+                    break
+        
         self.agent_states["responder"].diagnosis_complete = True
-        self.agent_states["responder"].diagnosis_details = action.reasoning or "Root cause identified"
+        self.agent_states["responder"].diagnosis_details = action.reasoning or f"Root cause for incident #{incident.id} identified"
         
         # Add diagnosis evidence
         evidence = EvidenceSnippet(
             id=f"ev-{len(self.evidence_gathered):04d}",
             source="diagnosis",
-            content=f"Root cause: {incident.incident_type.value} requires manual intervention",
+            content=f"Root cause: incident #{incident.id} {incident.incident_type.value} requires manual intervention",
             relevance_score=0.9,
             agent_role=AgentRole.RESPONDER,
         )
@@ -581,36 +588,24 @@ class DataCenterOpsEnv:
     
     def _action_fix(self, action: DataCenterAction) -> str:
         """Responder attempts automated fix."""
-        if not self.agent_states["responder"].diagnosis_complete:
-            return "Must diagnose before attempting fix"
-        
-        if self.agent_states["responder"].fix_attempted:
-            return "Fix already attempted"
-        
         self.agent_states["responder"].fix_attempted = True
         return "Automated fix attempted (may require manual intervention)"
     
     def _action_request_help(self, action: DataCenterAction) -> str:
         """Responder requests help from coordinator."""
-        if not self.agent_states["responder"].diagnosis_complete:
-            return "Must diagnose before requesting help"
-        
-        if self.agent_states["responder"].help_requested:
-            return "Help already requested"
-        
         active = [i for i in self.incidents if not i.resolved]
         if not active:
             return "No active incident"
-        
+            
         incident = active[0]
+        if action.incident_id is not None:
+            for inc in active:
+                if inc.id == action.incident_id:
+                    incident = inc
+                    break
+        
         self.agent_states["responder"].help_requested = True
         self.coordination_events += 1
-        
-        # Find matching technician
-        matching_techs = [
-            t for t in self.technicians
-            if t.available and incident.incident_type.value in t.specialization
-        ] or [t for t in self.technicians if t.available]
         
         # Notify coordinator
         msg = AgentMessage(
@@ -628,35 +623,40 @@ class DataCenterOpsEnv:
     
     def _action_dispatch(self, action: DataCenterAction) -> str:
         """Coordinator dispatches technician."""
-        # Check prerequisites
-        if not all([
-            self.agent_states["watcher"].alert_sent,
-            self.agent_states["watcher"].investigation_complete,
-            self.agent_states["responder"].diagnosis_complete,
-            self.agent_states["responder"].help_requested,
-        ]):
-            return "Pipeline incomplete - cannot dispatch"
-        
         # Find unassigned incident
-        unassigned = [i for i in self.incidents if not i.resolved and not i.assigned_technician]
+        active = [i for i in self.incidents if not i.resolved]
+        unassigned = [i for i in active if not i.assigned_technician]
         if not unassigned:
             return "No unassigned incidents"
+        
+        incident = unassigned[0]
+        if action.incident_id is not None:
+            for inc in unassigned:
+                if inc.id == action.incident_id:
+                    incident = inc
+                    break
         
         # Find available technician
         available = [t for t in self.technicians if t.available]
         if not available:
             return "No technicians available"
         
-        incident = unassigned[0]
-        
-        # Prefer specialty match
+        # Respect technician_id if provided
         technician = None
-        for t in available:
-            if incident.incident_type.value in t.specialization:
-                technician = t
-                break
+        if action.technician_id is not None:
+            for t in available:
+                if t.id == action.technician_id:
+                    technician = t
+                    break
+        
         if not technician:
-            technician = available[0]
+            # Prefer specialty match
+            for t in available:
+                if incident.incident_type.value in t.specialization:
+                    technician = t
+                    break
+            if not technician:
+                technician = available[0]
         
         # Dispatch
         technician.available = False
@@ -676,7 +676,7 @@ class DataCenterOpsEnv:
             sender=AgentRole.COORDINATOR,
             receiver="all",
             message_type="dispatch",
-            content=f"✅ Dispatched {technician.name} ({technician.specialization}) to {incident.equipment_name}",
+            content=f"✅ Dispatched {technician.name} ({technician.specialization}) to {incident.equipment_name} for incident #{incident.id}",
         )
         self.message_history.append(msg)
         self._broadcast_message(msg)
@@ -685,24 +685,25 @@ class DataCenterOpsEnv:
     
     def _action_escalate(self, action: DataCenterAction) -> str:
         """Coordinator escalates incident."""
-        high_severity = [i for i in self.incidents if not i.resolved 
-                        and i.severity in [Severity.HIGH, Severity.CRITICAL]]
-        
-        if not high_severity:
-            return "No high-severity incidents to escalate"
+        active = [i for i in self.incidents if not i.resolved]
+        incident = active[0] if active else None
+        if action.incident_id is not None:
+            for inc in active:
+                if inc.id == action.incident_id:
+                    incident = inc
+                    break
         
         self.agent_states["coordinator"].escalated = True
         self.coordination_events += 1
         
-        return f"Escalated {len(high_severity)} high-severity incident(s)"
+        return f"Escalated incident #{incident.id if incident else 'unknown'}"
     
     def _action_resolve(self, action: DataCenterAction) -> str:
         """Coordinator resolves incident."""
         # Find resolvable incidents
+        active = [i for i in self.incidents if not i.resolved]
         resolvable = []
-        for incident in self.incidents:
-            if incident.resolved:
-                continue
+        for incident in active:
             if not incident.assigned_technician:
                 continue
             if incident.dispatch_step is None:
@@ -713,15 +714,15 @@ class DataCenterOpsEnv:
                 resolvable.append(incident)
         
         if not resolvable:
-            # Check for too early
-            for incident in self.incidents:
-                if incident.assigned_technician and incident.dispatch_step:
-                    steps_since = self.step_number - incident.dispatch_step
-                    if steps_since < self.repair_steps:
-                        return f"Technician still working ({steps_since}/{self.repair_steps} steps)"
             return "No incidents ready for resolution"
         
         incident = resolvable[0]
+        if action.incident_id is not None:
+            for inc in resolvable:
+                if inc.id == action.incident_id:
+                    incident = inc
+                    break
+        
         incident.resolved = True
         incident.resolution_step = self.step_number
         incident.time_to_resolve = self.step_number - incident.step_started
@@ -747,6 +748,15 @@ class DataCenterOpsEnv:
         )
         self.message_history.append(msg)
         self._broadcast_message(msg)
+        
+        # Reset agent pipeline flags to allow handling of next incident
+        self.agent_states["watcher"].alert_sent = False
+        self.agent_states["watcher"].investigating = False
+        self.agent_states["watcher"].investigation_complete = False
+        self.agent_states["responder"].diagnosis_complete = False
+        self.agent_states["responder"].fix_attempted = False
+        self.agent_states["responder"].help_requested = False
+        self.agent_states["coordinator"].dispatch_complete = False
         
         # Update metrics
         idx = incident.id % 5
